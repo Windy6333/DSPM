@@ -1,3 +1,7 @@
+
+
+from __future__ import annotations
+
 """
 storage.py — SQLite persistence layer.
 
@@ -9,11 +13,14 @@ Tables:
                   detected_at, notified, resolved)
 """
 
+
 import sqlite3
 import uuid
 import logging
 from contextlib import contextmanager
 from config import Config
+from typing import Optional, Union
+
 
 logger = logging.getLogger(__name__)
 

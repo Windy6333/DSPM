@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 api_clients.py — HTTP clients for DSPM and GlobalSCAPE EFT.
 
@@ -97,7 +98,7 @@ def fetch_external_user_folders() -> list[str]:
 
     try:
         resp = requests.get(
-            f"{Config.SFTP_API_URL.rstrip('/')}/api/v1/users",
+            f"{Config.SFTP_API_URL.rstrip('/')}/admin/v2/sites/a223c2aa-1a00-42c4-8831-1f3cec746684/users",
             headers={
                 "content-type":  "application/json",
                 "Authorization": f"EFTAdminAuthToken {token}",
