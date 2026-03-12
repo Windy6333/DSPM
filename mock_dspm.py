@@ -10,10 +10,7 @@ app = Flask(__name__)
 # These paths must match the normalised form of the upload event paths
 # i.e. lowercase, forward slashes, prefix stripped
 SAMPLE_FINDINGS = [
-    {"file_path": "/usr/clients/acme/invoices/march_2024.csv"},
-    {"file_path": "/usr/clients/acme/contracts/agreement.pdf"},
-    {"file_path": "/usr/partners/xyz/employee_data.xlsx"},
-    {"file_path": "/usr/internal/hr/salaries.csv"},         # internal — should NOT alert
+    {"file_path": "/usr/dr_tester/ automation updated file.pdf"},         # internal — should NOT alert
 ]
 
 

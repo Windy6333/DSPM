@@ -1,12 +1,13 @@
-"""
+r"""
 app.py — Flask application entry point.
 
-Endpoints:
-  POST /api/sftp/upload-event   EFT fires this on every file upload
-  GET  /api/status              stats
-  GET  /health                  liveness probe
+Endpoints
+POST /api/sftp/upload-event   EFT sends upload notifications
+GET  /api/status              statistics
+GET  /health                  health check
 """
 
+import json
 import logging
 import threading
 from datetime import datetime, timezone
@@ -15,14 +16,16 @@ from flask import Flask, request, jsonify
 
 import storage
 import scheduler
-from config     import Config
+from config import Config
 from path_utils import normalise_upload_path
+
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -31,47 +34,69 @@ app = Flask(__name__)
 @app.post("/api/sftp/upload-event")
 def upload_event():
     """
-    Receive upload notifications from GlobalSCAPE EFT Event Rules.
-
-    EFT Event Rule body:
-      {
-        "username":    "%Username%",
-        "filepath":    "%TargetPath%",
-        "upload_time": "%DateTime%",
-        "user_email":  "%UserEmail%"
-      }
-
-    filepath arrives as a Windows path with server prefix:
-      \\\\i:\\sftp\\DR-EFTRoot\\DR-SFTP-IDFCBANK\\Usr\\folder\\file.csv
-
-    We normalise it before storing:
-      /usr/folder/file.csv
-
-    user_email may be comma-separated (multiple uploader emails).
-    We store it as-is and handle splitting in alerter.py.
+    Accepts any request body (JSON, form, raw text).
+    Parses safely and extracts required fields.
     """
-    data = request.get_json(silent=True)
+
+    raw_body = request.data.decode("utf-8", errors="ignore")
+
+    logger.info("Incoming request from %s", request.remote_addr)
+    logger.info("Headers: %s", dict(request.headers))
+    logger.info("Raw body: %s", raw_body)
+
+    data = None
+
+    # 1️⃣ Try normal JSON parsing
+    try:
+        data = request.get_json(force=False, silent=True)
+    except Exception:
+        pass
+
+    # 2️⃣ Try form encoded data
+    if not data and request.form:
+        data = request.form.to_dict()
+
+    # 3️⃣ Try raw body JSON
+    if not data and raw_body:
+        try:
+            data = json.loads(raw_body)
+        except Exception:
+            pass
+
+    # 4️⃣ fallback
     if not data:
-        return jsonify(error="Expected JSON body"), 400
+        data = {}
 
-    username    = (data.get("username")    or "").strip()
-    raw_path    = (data.get("filepath")    or "").strip()
-    user_email  = (data.get("user_email")  or "").strip()
-    upload_time = (data.get("upload_time") or datetime.now(timezone.utc).isoformat()).strip()
+    username = (data.get("username") or "").strip()
+    raw_path = (data.get("filepath") or "").strip()
+    user_email = (data.get("user_email") or "").strip()
 
+    upload_time = (data.get("upload_time") or "").strip()
+    if not upload_time:
+        upload_time = datetime.now(timezone.utc).isoformat()
+
+    # validate required fields
     if not username or not raw_path:
-        return jsonify(error="username and filepath are required"), 400
+        logger.warning("Invalid payload received: %s", data)
+        return jsonify(error="username and filepath required"), 400
 
-    # normalise Windows path → clean Unix path
+    # normalize Windows path
     filepath = normalise_upload_path(raw_path)
 
+    # save event asynchronously
     threading.Thread(
         target=_save_upload_event,
         args=(filepath, username, user_email, upload_time),
         daemon=True,
     ).start()
 
-    logger.info("Upload event: %s → %s by %s", raw_path, filepath, username)
+    logger.info(
+        "Upload event: %s → %s by %s",
+        raw_path,
+        filepath,
+        username,
+    )
+
     return jsonify(status="accepted"), 202
 
 
@@ -99,4 +124,10 @@ def health():
 if __name__ == "__main__":
     storage.init_db()
     scheduler.start()
-    app.run(host=Config.HOST, port=Config.PORT, debug=False, threaded=True)
+
+    app.run(
+        host=Config.HOST,
+        port=Config.PORT,
+        debug=False,
+        threaded=True,
+    )

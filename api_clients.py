@@ -34,11 +34,6 @@ def _dspm_session() -> requests.Session:
 def _get_eft_token() -> str | None:
     """
     Authenticate with EFT admin API and return a session token.
-
-    curl equivalent:
-      curl -sk -H "content-type: application/json" \
-           -d '{"userName":"--","password":"--","authType":"EFT"}' \
-           http://ip/admin/v1/authentication
     """
     try:
         resp = requests.post(
@@ -52,11 +47,12 @@ def _get_eft_token() -> str | None:
             timeout=_TIMEOUT,
             verify=False,
         )
-        resp.raise_for_status()
-        data  = resp.json()
 
-        # adapt field name if your EFT returns a different key for the token
+        resp.raise_for_status()
+        data = resp.json()
+
         token = data.get("token") or data.get("authToken") or data.get("access_token")
+
         if not token:
             logger.error("EFT auth response did not contain a token: %s", data)
             return None
@@ -76,21 +72,10 @@ def fetch_external_user_folders() -> list[str]:
     1. Authenticate → get token
     2. Fetch all users → filter external → extract and normalise folder paths
 
-    curl equivalent:
-      curl -sk -H "content-type: json" \
-           -H "Authorization: EFTAdminAuthToken <token>" \
-           https://ip/api/v1/users
-
-    Expected response:
-    [
-        {"name": "user1", "email": "u@company.com", "type": "internal", "folder": "/Usr/internal/"},
-        {"name": "user2", "email": "x@partner.com", "type": "external", "folder": "/Usr/clients/acme/"},
-        ...
-    ]
-
     Returns normalised folder paths for external users only:
     ["/usr/clients/acme/", "/usr/partners/xyz/"]
     """
+
     token = _get_eft_token()
     if not token:
         logger.error("Skipping user sync — could not obtain EFT token.")
@@ -100,22 +85,38 @@ def fetch_external_user_folders() -> list[str]:
         resp = requests.get(
             f"{Config.SFTP_API_URL.rstrip('/')}/admin/v2/sites/a223c2aa-1a00-42c4-8831-1f3cec746684/users",
             headers={
-                "content-type":  "application/json",
+                "content-type": "application/json",
                 "Authorization": f"EFTAdminAuthToken {token}",
             },
             timeout=_TIMEOUT,
             verify=False,
         )
+
         resp.raise_for_status()
-        users = resp.json()
+
+        data = resp.json()
+        users = data.get("data", [])
 
         folders = []
+
         for u in users:
             if not isinstance(u, dict):
                 continue
-            if u.get("type", "").lower() != "external":
+
+            # Determine user type from template
+            template_name = (
+                u.get("relationships", {})
+                .get("userTemplate", {})
+                .get("data", {})
+                .get("meta", {})
+                .get("name", "")
+            )
+
+            if template_name.lower() != "external user":
                 continue
+
             folder = _parse_folder(u)
+
             if folder:
                 folders.append(folder)
 
@@ -129,16 +130,24 @@ def fetch_external_user_folders() -> list[str]:
 
 def _parse_folder(user: dict) -> str | None:
     """
-    Extract and normalise folder path from a user record.
-    Adapt field name here if your EFT uses a different key.
+    Extract and normalise folder path from EFT user record.
     """
-    raw = user.get("folder") or user.get("home_folder") or user.get("root_folder")
+
+    home = user.get("attributes", {}).get("homeFolder", {})
+
+    # Skip users without enabled home folder
+    if home.get("enabled") != "yes":
+        return None
+
+    raw = home.get("value", {}).get("path")
+
     if not raw:
         return None
+
     return normalise_folder_path(raw)
 
 
-# ── DSPM API ───────────────────────────────────────────────────────────────────
+# ── DSPM API ──────────────────────────────────────────────────────�────────────
 
 def fetch_pii_filepaths() -> list[str]:
     """
@@ -153,18 +162,20 @@ def fetch_pii_filepaths() -> list[str]:
     }
 
     Returns flat list of filepaths.
-    DSPM paths are already Unix-style so no prefix stripping needed here.
     """
+
     try:
         resp = _dspm_session().get(
             f"{Config.DSPM_API_URL.rstrip('/')}/api/v1/findings",
             params={"has_pii": "true", "limit": 10000},
             timeout=_TIMEOUT,
         )
+
         resp.raise_for_status()
         data = resp.json()
 
-        raw   = data.get("findings", data if isinstance(data, list) else [])
+        raw = data.get("findings", data if isinstance(data, list) else [])
+
         paths = [_parse_filepath(item) for item in raw]
         paths = [p for p in paths if p]
 
@@ -177,6 +188,6 @@ def fetch_pii_filepaths() -> list[str]:
 
 
 def _parse_filepath(item: dict) -> str | None:
-    """Extract filepath from DSPM finding. Adapt field name here if needed."""
+    """Extract filepath from DSPM finding."""
     path = item.get("file_path") or item.get("filepath") or item.get("path")
     return path.strip().lower() if path else None
