@@ -34,8 +34,12 @@ app = Flask(__name__)
 @app.post("/api/sftp/upload-event")
 def upload_event():
     """
-    Accepts any request body (JSON, form, raw text).
-    Parses safely and extracts required fields.
+    Receive upload notifications from EFT.
+
+    Accepts:
+    - JSON
+    - form data
+    - raw body
     """
 
     raw_body = request.data.decode("utf-8", errors="ignore")
@@ -46,24 +50,24 @@ def upload_event():
 
     data = None
 
-    # 1️⃣ Try normal JSON parsing
+    # Try JSON first
     try:
         data = request.get_json(force=False, silent=True)
     except Exception:
         pass
 
-    # 2️⃣ Try form encoded data
+    # Try form data
     if not data and request.form:
         data = request.form.to_dict()
 
-    # 3️⃣ Try raw body JSON
+    # Try parsing raw body JSON
     if not data and raw_body:
         try:
             data = json.loads(raw_body)
         except Exception:
             pass
 
-    # 4️⃣ fallback
+    # fallback
     if not data:
         data = {}
 
@@ -72,18 +76,24 @@ def upload_event():
     user_email = (data.get("user_email") or "").strip()
 
     upload_time = (data.get("upload_time") or "").strip()
+
     if not upload_time:
         upload_time = datetime.now(timezone.utc).isoformat()
 
-    # validate required fields
+    # Validate required fields
     if not username or not raw_path:
-        logger.warning("Invalid payload received: %s", data)
-        return jsonify(error="username and filepath required"), 400
 
-    # normalize Windows path
+        logger.warning("Invalid upload event payload received: %s", data)
+
+        return jsonify({
+            "status": "error",
+            "message": "username and filepath required"
+        }), 400
+
+    # Normalize path
     filepath = normalise_upload_path(raw_path)
 
-    # save event asynchronously
+    # Save asynchronously
     threading.Thread(
         target=_save_upload_event,
         args=(filepath, username, user_email, upload_time),
@@ -91,24 +101,36 @@ def upload_event():
     ).start()
 
     logger.info(
-        "Upload event: %s → %s by %s",
-        raw_path,
-        filepath,
+        "Upload event stored | user=%s | file=%s",
         username,
+        filepath
     )
 
-    return jsonify(status="accepted"), 202
+    return jsonify({"status": "accepted"}), 202
 
 
 def _save_upload_event(filepath, username, user_email, upload_time):
+
     try:
-        storage.save_upload_event(filepath, username, user_email, upload_time)
+
+        storage.save_upload_event(
+            filepath,
+            username,
+            user_email,
+            upload_time
+        )
+
     except Exception:
-        logger.exception("Failed to save upload event for %s", filepath)
+
+        logger.exception(
+            "Failed to save upload event for %s",
+            filepath
+        )
 
 
 @app.get("/api/status")
 def status():
+
     return jsonify(
         status="running",
         stats=storage.get_stats(),
@@ -118,11 +140,16 @@ def status():
 
 @app.get("/health")
 def health():
+
     return jsonify(ok=True), 200
 
 
 if __name__ == "__main__":
+
+    logger.info("Starting PII Notification System...")
+
     storage.init_db()
+
     scheduler.start()
 
     app.run(

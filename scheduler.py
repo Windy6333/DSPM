@@ -70,7 +70,7 @@ def start():
 
     _scheduler.add_job(
         run_dspm_sync,
-        trigger=IntervalTrigger(minutes=5),
+        trigger=IntervalTrigger(minutes=3),
         id="dspm_sync",
         name="DSPM PII Sync + Correlation",
         replace_existing=True,
